@@ -4,7 +4,7 @@
 
 <br/>
 
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&pause=1200&color=2DC94E&center=true&vCenter=true&width=500&lines=%E2%9A%A1+G2ray+Panel+v1.0;Deploy+VLESS+in+Codespaces;Manage+Configs+on+the+Fly;Auto-Keepalive+Included;Native+XHTTP+Support" alt="Typing animation" />
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&pause=1200&color=2DC94E&center=true&vCenter=true&width=500&lines=%E2%9A%A1+G2ray+Panel+v1.2.2;Deploy+VLESS+in+Codespaces;Manage+Configs+on+the+Fly;Auto-Keepalive+Included;Native+XHTTP+Support" alt="Typing animation" />
 
 <img src="./assets/preview.png" alt="G2ray Panel Preview" width="800" style="border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);" />
 
