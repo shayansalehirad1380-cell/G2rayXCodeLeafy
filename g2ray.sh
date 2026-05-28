@@ -98,6 +98,12 @@ json_dns_ips() {
     fi
 }
 
+curl_remote_ip() {
+    local domain="$1" ip
+    ip=$(curl -sk -m 5 -o /dev/null -w '%{remote_ip}' "https://${domain}/" 2>/dev/null || true)
+    [[ "$ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && printf '%s\n' "$ip"
+}
+
 resolve_domain_ips() {
     local domain="$1" candidates joined
     candidates=$({
@@ -110,6 +116,7 @@ resolve_domain_ips() {
         getent hosts "$domain" 2>/dev/null | awk '{print $1}' || true
         json_dns_ips "https://dns.google/resolve?name=${domain}&type=A"
         json_dns_ips "https://cloudflare-dns.com/dns-query?name=${domain}&type=A" "accept: application/dns-json"
+        curl_remote_ip "$domain"
     } | awk '/^[0-9]+(\.[0-9]+){3}$/ && !seen[$0]++ {print}')
     if [[ -n "$candidates" ]]; then
         joined=$(printf '%s' "$candidates" | tr '\n' ',' | sed 's/,$//')
@@ -357,9 +364,17 @@ wait_for_port() {
     return 1
 }
 
+health_probe() {
+    local engine="stopped" listener="closed" code
+    xray_running && engine="running"
+    is_port_open && listener="open"
+    code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "https://${PORT_DOMAIN}" 2>/dev/null || echo "0")
+    log_event INFO "health engine=${engine} listener=${listener} external_code=${code:-0} domain=${PORT_DOMAIN}"
+}
+
 _background_tasks() {
     set +e
-    local tick=0
+    local tick=0 health_tick=0
     while true; do
         sleep 60
         if [[ "$PORT_DOMAIN" == unknown-codespace* ]]; then
@@ -379,6 +394,7 @@ _background_tasks() {
         fi
         save_xray_stats    >/dev/null 2>&1 || true
         save_session_uptime >/dev/null 2>&1 || true
+        (( ++health_tick >= 5 )) && { health_probe >/dev/null 2>&1; health_tick=0; }
         (( ++tick >= 3 )) && { fetch_remote_message; tick=0; }
     done
 }

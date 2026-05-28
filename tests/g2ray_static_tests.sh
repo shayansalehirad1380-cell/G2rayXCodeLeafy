@@ -176,6 +176,16 @@ test_runtime_diagnostics_logging() {
         || fail 'force reconnect does not log start of reconnect flow'
     grep_fixed 'log_event INFO "resolver domain=' "$SCRIPT" \
         || fail 'resolver does not log resolved fallback IP candidates'
+    grep_fixed 'curl_remote_ip()' "$SCRIPT" \
+        || fail 'script does not use curl remote_ip as a resolver fallback'
+    grep_fixed 'curl_remote_ip "$domain"' "$SCRIPT" \
+        || fail 'multi-IP resolver does not include curl remote_ip fallback'
+    grep_fixed 'health_probe()' "$SCRIPT" \
+        || fail 'script does not define a periodic health probe'
+    grep_fixed 'log_event INFO "health engine=' "$SCRIPT" \
+        || fail 'health probe does not log engine/listener/public endpoint state'
+    grep_fixed 'health_probe >/dev/null 2>&1' "$SCRIPT" \
+        || fail 'background supervisor does not run periodic health probes'
     grep_fixed 'show_diagnostics()' "$SCRIPT" \
         || fail 'script does not provide a diagnostics view'
     grep_fixed '14) Diagnostics' "$SCRIPT" \
