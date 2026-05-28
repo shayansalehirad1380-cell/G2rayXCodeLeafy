@@ -12,6 +12,8 @@ DATA_DIR="$BASE_DIR/data"
 CONFIG_FILE="$DATA_DIR/config.json"
 UUID_FILE="$DATA_DIR/uuid.txt"
 BG_TASKS_PID="$DATA_DIR/bg_tasks.pid"
+BG_TASKS_VERSION_FILE="$DATA_DIR/bg_tasks.version"
+ROUTE_BAD_COUNT_FILE="$DATA_DIR/xhttp_route_bad_count"
 XRAY_PID_FILE="$DATA_DIR/xray.pid"
 SAVED_BYTES_FILE="$DATA_DIR/saved_bytes.json"
 SESSION_BYTES_FILE="$DATA_DIR/session_bytes.json"
@@ -113,6 +115,46 @@ curl_remote_ip() {
     local domain="$1" ip
     ip=$(curl -sk -m 5 -o /dev/null -w '%{remote_ip}' "https://${domain}/" 2>/dev/null || true)
     [[ "$ip" =~ ^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$ ]] && printf '%s\n' "$ip"
+}
+
+xhttp_config_path() {
+    if [[ -f "$CONFIG_FILE" ]] && command -v jq >/dev/null 2>&1; then
+        jq -r '.inbounds[]? | select(.tag=="vless-in") | .streamSettings.xhttpSettings.path // "/"' "$CONFIG_FILE" 2>/dev/null \
+            | awk 'NF {print; exit}'
+        return 0
+    fi
+    printf '/'
+}
+
+xhttp_probe_status() {
+    local target="${1:-external}" path code url
+    path=$(xhttp_config_path)
+    [[ "$path" == /* ]] || path="/${path}"
+    case "$target" in
+        local) url="http://127.0.0.1:${XRAY_PORT}${path}" ;;
+        *)     url="https://${PORT_DOMAIN}${path}" ;;
+    esac
+    code=$(curl -sk -m 5 -X OPTIONS -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "0")
+    [[ "$code" == "000" ]] && code=0
+    printf '%s' "${code:-0}"
+}
+
+xhttp_status_usable() {
+    local code="${1:-0}"
+    [[ "$code" == "200" || "$code" == "400" ]]
+}
+
+increment_route_bad_count() {
+    local count
+    count=$(cat "$ROUTE_BAD_COUNT_FILE" 2>/dev/null || echo 0)
+    [[ "$count" =~ ^[0-9]+$ ]] || count=0
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$ROUTE_BAD_COUNT_FILE"
+    printf '%s' "$count"
+}
+
+reset_route_bad_count() {
+    rm -f "$ROUTE_BAD_COUNT_FILE" 2>/dev/null || true
 }
 
 resolve_domain_ips() {
@@ -285,6 +327,21 @@ ensure_codespace_port_public() {
     GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 NO_COLOR=1 GH_FORCE_TTY=0 \
         gh codespace ports visibility "${XRAY_PORT}:public" -c "$CODESPACE_NAME" \
         </dev/null >/dev/null 2>&1
+}
+
+repair_codespace_port_route() {
+    command -v gh >/dev/null 2>&1 || return 1
+    log_event WARN "route_repair begin port=${XRAY_PORT} domain=${PORT_DOMAIN}"
+    GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 NO_COLOR=1 GH_FORCE_TTY=0 \
+        gh codespace ports visibility "${XRAY_PORT}:private" -c "$CODESPACE_NAME" \
+        </dev/null >/dev/null 2>&1 || true
+    sleep 2
+    if ensure_codespace_port_public; then
+        log_event INFO "route_repair public_ok port=${XRAY_PORT}"
+        return 0
+    fi
+    log_event ERROR "route_repair public_failed port=${XRAY_PORT}"
+    return 1
 }
 
 save_xray_stats() {
@@ -461,16 +518,18 @@ wait_for_port() {
 }
 
 health_probe() {
-    local engine="stopped" listener="closed" code
+    local engine="stopped" listener="closed" code xcode xhttp_route_usable=false
     xray_running && engine="running"
     is_port_open && listener="open"
     code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "https://${PORT_DOMAIN}" 2>/dev/null || echo "0")
-    log_event INFO "health engine=${engine} listener=${listener} external_code=${code:-0} domain=${PORT_DOMAIN}"
+    xcode=$(xhttp_probe_status external)
+    xhttp_status_usable "$xcode" && xhttp_route_usable=true
+    log_event INFO "health engine=${engine} listener=${listener} external_code=${code:-0} xhttp_probe=${xcode:-0} xhttp_route_usable=${xhttp_route_usable} domain=${PORT_DOMAIN}"
 }
 
 self_heal_once() {
     [[ -f "$CONFIG_FILE" ]] || return 0
-    local reason="" code
+    local reason="" code xcode bad_count
 
     if ! ensure_codespace_port_public >/dev/null 2>&1; then
         log_event WARN "self_heal port_public_failed port=${XRAY_PORT}"
@@ -498,6 +557,20 @@ self_heal_once() {
         log_event WARN "self_heal edge_unreachable code=${code:-0} action=force_reconnect"
         force_reconnect --no-prompt >/dev/null 2>&1 \
             || log_event ERROR "self_heal force_reconnect_failed code=${code:-0}"
+        return 0
+    fi
+
+    xcode=$(xhttp_probe_status external)
+    if xhttp_status_usable "$xcode"; then
+        reset_route_bad_count
+    else
+        bad_count=$(increment_route_bad_count)
+        log_event WARN "self_heal route_unusable xhttp_probe=${xcode:-0} bad_count=${bad_count} action=observe"
+        if (( bad_count >= 2 )); then
+            log_event WARN "self_heal route_unusable action=repair port=${XRAY_PORT}"
+            repair_codespace_port_route >/dev/null 2>&1 || true
+            reset_route_bad_count
+        fi
     fi
 }
 
@@ -526,12 +599,47 @@ _background_tasks() {
 start_background_tasks() {
     if [[ -f "$BG_TASKS_PID" ]]; then
         local p; p=$(cat "$BG_TASKS_PID" 2>/dev/null || true)
-        bg_tasks_running "$p" && return 0
+        if bg_tasks_running "$p"; then
+            if background_supervisor_version_matches; then
+                return 0
+            fi
+            log_event WARN "background supervisor_stale pid=${p}"
+            stop_background_tasks
+        fi
     fi
     _background_tasks </dev/null >/dev/null 2>&1 &
     printf '%s\n' $! > "$BG_TASKS_PID"
+    background_supervisor_version > "$BG_TASKS_VERSION_FILE" 2>/dev/null || true
     log_event INFO "background supervisor_started pid=$!"
     disown 2>/dev/null || true
+}
+
+background_supervisor_version() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$BASE_DIR/g2ray.sh" 2>/dev/null | awk '{print $1}'
+    elif command -v md5sum >/dev/null 2>&1; then
+        md5sum "$BASE_DIR/g2ray.sh" 2>/dev/null | awk '{print $1}'
+    elif command -v git >/dev/null 2>&1; then
+        git -C "$BASE_DIR" rev-parse HEAD 2>/dev/null || true
+    fi
+}
+
+background_supervisor_version_matches() {
+    local expected current
+    expected=$(cat "$BG_TASKS_VERSION_FILE" 2>/dev/null || true)
+    current=$(background_supervisor_version)
+    [[ -n "$expected" && -n "$current" && "$expected" == "$current" ]]
+}
+
+stop_background_tasks() {
+    local p
+    p=$(cat "$BG_TASKS_PID" 2>/dev/null || true)
+    if bg_tasks_running "$p"; then
+        kill "$p" >/dev/null 2>&1 || true
+        sleep 1
+        bg_tasks_running "$p" && kill -9 "$p" >/dev/null 2>&1 || true
+    fi
+    rm -f "$BG_TASKS_PID" "$BG_TASKS_VERSION_FILE" 2>/dev/null || true
 }
 
 bg_tasks_running() {
@@ -790,6 +898,17 @@ show_diagnostics() {
     is_port_open \
         && echo -e "  Listener : ${GREEN}Port ${XRAY_PORT} open${NC}" \
         || echo -e "  Listener : ${RED}Port ${XRAY_PORT} closed${NC}"
+    if [[ -f "$CONFIG_FILE" ]] && command -v jq >/dev/null 2>&1; then
+        local cfg_line cfg_network cfg_security cfg_path cfg_mode cfg_uuid
+        cfg_line=$(jq -r '.inbounds[]? | select(.tag=="vless-in") |
+            [.streamSettings.network // "-", .streamSettings.security // "-",
+             .streamSettings.xhttpSettings.path // "-", .streamSettings.xhttpSettings.mode // "-",
+             .settings.clients[0].id // ""] | @tsv' "$CONFIG_FILE" 2>/dev/null | head -1)
+        if [[ -n "$cfg_line" ]]; then
+            IFS=$'\t' read -r cfg_network cfg_security cfg_path cfg_mode cfg_uuid <<< "$cfg_line"
+            echo -e "  Config    : ${WHITE}${cfg_network}/${cfg_security}${NC} ${DIM}path=${cfg_path} mode=${cfg_mode} uuid_hash=$(fingerprint_secret "$cfg_uuid")${NC}"
+        fi
+    fi
 
     echo -e "\n  ${WHITE}${B}Codespaces Ports${NC}"
     if command -v gh >/dev/null 2>&1; then
@@ -799,6 +918,16 @@ show_diagnostics() {
     else
         echo -e "  ${DIM}gh CLI unavailable.${NC}"
     fi
+
+    echo -e "\n  ${WHITE}${B}XHTTP Probes${NC}"
+    local local_probe edge_probe local_usable=false edge_usable=false
+    local_probe=$(xhttp_probe_status local)
+    edge_probe=$(xhttp_probe_status external)
+    xhttp_status_usable "$local_probe" && local_usable=true
+    xhttp_status_usable "$edge_probe" && edge_usable=true
+    echo -e "  Local OPTIONS : ${WHITE}HTTP ${local_probe}${NC} ${DIM}(usable=${local_usable})${NC}"
+    echo -e "  Edge OPTIONS  : ${WHITE}HTTP ${edge_probe}${NC} ${DIM}(usable=${edge_usable})${NC}"
+    echo -e "  ${DIM}HTTP 404 here means the Codespaces edge has not routed this Host/path to Xray yet.${NC}"
 
     echo -e "\n  ${WHITE}${B}Fallback IP Candidates${NC}"
     echo -e "  ${DIM}(includes resolved, manual, and built-in fallbacks)${NC}"
@@ -869,17 +998,33 @@ force_reconnect() {
     fi
 
     echo -ne "  ${DIM}╰─${NC} Verify External   : "
-    local edge_reachable=false code
+    local edge_reachable=false xhttp_route_usable=false code xcode
     for _i in 1 2 3 4; do
         code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "https://${PORT_DOMAIN}" 2>/dev/null || echo "0")
-        [[ "$code" != "000" && "$code" != "0" ]] && { edge_reachable=true; break; }
+        [[ "$code" != "000" && "$code" != "0" ]] && edge_reachable=true
+        xcode=$(xhttp_probe_status external)
+        if xhttp_status_usable "$xcode"; then
+            xhttp_route_usable=true
+            break
+        fi
         sleep 2
     done
-    log_event INFO "force_reconnect verify_external edge_reachable=${edge_reachable} code=${code:-none} domain=${PORT_DOMAIN}"
-    [[ "$edge_reachable" == true ]] || failed=1
-    [[ "$edge_reachable" == true ]] \
-        && echo -e "${GREEN}Edge reachable (HTTP ${code})${NC}\n" \
-        || echo -e "${YELLOW}Pending / delayed (HTTP ${code:-0})${NC}\n"
+    if [[ "$edge_reachable" == true && "$xhttp_route_usable" != true ]]; then
+        repair_codespace_port_route >/dev/null 2>&1 || true
+        sleep 3
+        xcode=$(xhttp_probe_status external)
+        xhttp_status_usable "$xcode" && xhttp_route_usable=true
+    fi
+    log_event INFO "force_reconnect verify_external edge_reachable=${edge_reachable} code=${code:-none} xhttp_probe=${xcode:-none} xhttp_route_usable=${xhttp_route_usable} domain=${PORT_DOMAIN}"
+    [[ "$edge_reachable" == true && "$xhttp_route_usable" == true ]] || failed=1
+    if [[ "$xhttp_route_usable" == true ]]; then
+        reset_route_bad_count
+        echo -e "${GREEN}XHTTP route usable (HTTP ${xcode})${NC}\n"
+    elif [[ "$edge_reachable" == true ]]; then
+        echo -e "${YELLOW}Edge reachable but route settling (HTTP ${xcode:-0})${NC}\n"
+    else
+        echo -e "${YELLOW}Pending / delayed (HTTP ${code:-0})${NC}\n"
+    fi
 
     [[ "$no_prompt" == "--no-prompt" ]] && { sleep 1; return "$failed"; }
     echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r

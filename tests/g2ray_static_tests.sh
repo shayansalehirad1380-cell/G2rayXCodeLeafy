@@ -333,6 +333,34 @@ test_runtime_diagnostics_logging() {
     pass 'runtime diagnostics logging is present'
 }
 
+test_xhttp_route_settling_is_observable() {
+    grep_fixed 'BG_TASKS_VERSION_FILE=' "$SCRIPT" \
+        || fail 'background supervisor does not record a script version marker'
+    grep_fixed 'background_supervisor_version()' "$SCRIPT" \
+        || fail 'script cannot fingerprint the active background supervisor version'
+    grep_fixed 'stop_background_tasks()' "$SCRIPT" \
+        || fail 'script cannot stop stale background supervisors after updates'
+    grep_fixed 'background_supervisor_version_matches' "$SCRIPT" \
+        || fail 'start_background_tasks reuses stale supervisors after script updates'
+    grep_fixed 'xhttp_probe_status()' "$SCRIPT" \
+        || fail 'script does not provide a dedicated XHTTP edge probe'
+    grep_fixed 'xhttp_status_usable()' "$SCRIPT" \
+        || fail 'script does not classify XHTTP probe status codes'
+    grep_fixed '[[ "$code" == "200" || "$code" == "400" ]]' "$SCRIPT" \
+        || fail 'HTTP 404 is still treated as a usable XHTTP route'
+    grep_fixed 'xhttp_route_usable=' "$SCRIPT" \
+        || fail 'health/reconnect logs do not expose XHTTP route usability'
+    grep_fixed 'repair_codespace_port_route()' "$SCRIPT" \
+        || fail 'script has no repair path for stale Codespaces port routing'
+    grep_fixed 'route_unusable' "$SCRIPT" \
+        || fail 'watchdog does not distinguish unusable XHTTP routing from a dead edge'
+    grep_fixed 'XHTTP Probes' "$SCRIPT" \
+        || fail 'diagnostics do not show local/external XHTTP probe results'
+    grep_fixed 'Config    :' "$SCRIPT" \
+        || fail 'diagnostics do not show XHTTP config path/mode/network summary'
+    pass 'XHTTP route settling is observable and stale supervisors are replaced'
+}
+
 test_docs_and_public_configs_are_consistent() {
     grep_fixed '1-to-14' "$README" \
         || fail 'README menu count is stale'
@@ -355,4 +383,5 @@ test_generated_config_uses_resilient_dns_fallback
 test_generated_links_include_domain_and_ip_variants
 test_terminal_branding_is_customized_red
 test_runtime_diagnostics_logging
+test_xhttp_route_settling_is_observable
 test_docs_and_public_configs_are_consistent
