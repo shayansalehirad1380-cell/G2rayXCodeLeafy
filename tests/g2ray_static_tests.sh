@@ -213,12 +213,12 @@ test_runtime_diagnostics_logging() {
         || fail 'start_xray does not log successful launches'
     grep_fixed 'log_event INFO "force_reconnect begin' "$SCRIPT" \
         || fail 'force reconnect does not log start of reconnect flow'
-    grep_fixed '[[ "$code" =~ ^2[0-9]{2}$ ]]' "$SCRIPT" \
-        || fail 'external reconnect verification treats non-2xx statuses as healthy'
-    grep_fixed 'verify_external usable=' "$SCRIPT" \
-        || fail 'external reconnect verification does not log whether the endpoint is usable'
+    grep_fixed '[[ "$code" != "000" && "$code" != "0" ]]' "$SCRIPT" \
+        || fail 'external reconnect verification does not distinguish reachable HTTP edge responses from connection failure'
+    grep_fixed 'verify_external edge_reachable=' "$SCRIPT" \
+        || fail 'external reconnect verification does not log whether the Codespaces edge is reachable'
     if grep_fixed 'verify_external reachable=' "$SCRIPT"; then
-        fail 'external reconnect verification still labels HTTP 404 as reachable'
+        fail 'external reconnect verification still uses ambiguous reachable logging'
     fi
     grep_fixed 'log_event INFO "resolver domain=' "$SCRIPT" \
         || fail 'resolver does not log resolved fallback IP candidates'

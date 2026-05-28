@@ -745,16 +745,16 @@ force_reconnect() {
     fi
 
     echo -ne "  ${DIM}╰─${NC} Verify External   : "
-    local ok=false code
+    local edge_reachable=false code
     for _i in 1 2 3 4; do
         code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "https://${PORT_DOMAIN}" 2>/dev/null || echo "0")
-        [[ "$code" =~ ^2[0-9]{2}$ ]] && { ok=true; break; }
+        [[ "$code" != "000" && "$code" != "0" ]] && { edge_reachable=true; break; }
         sleep 2
     done
-    log_event INFO "force_reconnect verify_external usable=${ok} code=${code:-none} domain=${PORT_DOMAIN}"
-    [[ "$ok" == true ]] \
-        && echo -e "${GREEN}Usable (HTTP ${code})${NC}\n" \
-        || echo -e "${YELLOW}Bad response / delayed (HTTP ${code:-0})${NC}\n"
+    log_event INFO "force_reconnect verify_external edge_reachable=${edge_reachable} code=${code:-none} domain=${PORT_DOMAIN}"
+    [[ "$edge_reachable" == true ]] \
+        && echo -e "${GREEN}Edge reachable (HTTP ${code})${NC}\n" \
+        || echo -e "${YELLOW}Pending / delayed (HTTP ${code:-0})${NC}\n"
 
     [[ "$no_prompt" == "--no-prompt" ]] && { sleep 1; return; }
     echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r
