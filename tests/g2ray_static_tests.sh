@@ -161,12 +161,26 @@ test_generated_links_include_domain_and_ip_variants() {
         || fail 'domain link must use PORT_DOMAIN as address, SNI, and host'
     grep_fixed '_VLESS_IPS=$(generate_ip_links)' "$SCRIPT" \
         || fail 'display/copy paths do not use multi-IP fallback generation'
-    grep_fixed '_VLESS_PRIMARY=$(first_nonempty_line "$_VLESS_IPS")' "$SCRIPT" \
-        || fail 'display path does not select an IP fallback as the primary link'
-    grep_fixed 'qrencode -m 2 -t ANSIUTF8 "$_VLESS_PRIMARY"' "$SCRIPT" \
-        || fail 'QR code does not encode the primary IP-first link'
-    grep_fixed 'Recommended VLESS Link' "$SCRIPT" \
-        || fail 'display does not label the primary recommended link clearly'
+    grep_fixed 'render_config_entry()' "$SCRIPT" \
+        || fail 'display does not render each config as a separate copy-safe entry'
+    grep_fixed 'render_config_qr()' "$SCRIPT" \
+        || fail 'display does not render a QR code for each config entry'
+    grep_fixed 'qrencode -m 0 -t UTF8 "$link"' "$SCRIPT" \
+        || fail 'QR renderer does not use compact terminal QR output'
+    grep_fixed 'printf '\''%s\n'\'' "$link"' "$SCRIPT" \
+        || fail 'config links are not printed as raw copy-ready lines'
+    grep_fixed 'printf '\''%s\n'\'' "${_CONFIG_LINKS[@]}" > "$MOBILE_CONFIG_FILE"' "$SCRIPT" \
+        || fail 'mobile config file is not written from the full ordered config list'
+    grep_fixed 'Recommended IP link' "$SCRIPT" \
+        || fail 'display does not label the primary IP config clearly'
+    grep_fixed 'Domain link' "$SCRIPT" \
+        || fail 'display does not label the domain config clearly'
+    if grep_fixed 'qrencode -m 2 -t ANSIUTF8 "$_VLESS_PRIMARY"' "$SCRIPT"; then
+        fail 'display still renders only one large QR code'
+    fi
+    if grep_fixed 'sed "s/^/  ${WHITE}/;s/$/${NC}/"' "$SCRIPT"; then
+        fail 'display still pipes colored links through sed, which corrupts copied configs'
+    fi
     if grep_fixed '"$_VLESS_IP"' "$SCRIPT"; then
         fail 'display/copy paths still reference the old singular fallback variable'
     fi

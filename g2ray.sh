@@ -156,6 +156,27 @@ first_nonempty_line() {
     awk 'NF {print; exit}' <<< "${1:-}"
 }
 
+render_config_qr() {
+    local link="$1"
+    if command -v qrencode >/dev/null 2>&1; then
+        qrencode -m 0 -t UTF8 "$link" | while IFS= read -r line; do
+            printf '  %s\n' "$line"
+        done
+    else
+        echo -e "  ${DIM}(qrencode not installed - QR unavailable)${NC}"
+    fi
+}
+
+render_config_entry() {
+    local index="$1" label="$2" link="$3"
+    echo -e "  ${RED}[${index}]${NC} ${WHITE}${B}${label}${NC}"
+    echo -e "  ${DIM}QR:${NC}"
+    render_config_qr "$link"
+    echo -e "  ${DIM}Copy-ready link:${NC}"
+    printf '%s\n' "$link"
+    echo ""
+}
+
 draw_logo() {
     echo -e "${RED}${B}"
     echo -e "    ██████╗ ██████╗ ██████╗  █████╗ ██╗   ██╗"
@@ -836,15 +857,31 @@ while true; do
             check_port_visibility || continue
             _VLESS_DOMAIN=$(generate_domain_link) || _VLESS_DOMAIN=""
             _VLESS_IPS=$(generate_ip_links) || _VLESS_IPS=""
-            _VLESS_PRIMARY=$(first_nonempty_line "$_VLESS_IPS")
-            [[ -n "$_VLESS_PRIMARY" ]] || _VLESS_PRIMARY="$_VLESS_DOMAIN"
-            _VLESS_REMAINING_IPS=$(printf '%s\n' "$_VLESS_IPS" | grep -Fvx "$_VLESS_PRIMARY" || true)
+            mapfile -t _VLESS_IP_ARRAY < <(printf '%s\n' "$_VLESS_IPS" | awk 'NF')
+            _CONFIG_LINKS=()
+            _CONFIG_LABELS=()
+            _DOMAIN_ALREADY=false
+            for _LINK in "${_VLESS_IP_ARRAY[@]}"; do
+                [[ -n "$_LINK" ]] || continue
+                if ((${#_CONFIG_LINKS[@]} == 0)); then
+                    _CONFIG_LABELS+=("Recommended IP link (try this first)")
+                else
+                    _CONFIG_LABELS+=("IP fallback link $((${#_CONFIG_LINKS[@]} + 1))")
+                fi
+                _CONFIG_LINKS+=("$_LINK")
+                [[ "$_LINK" == "$_VLESS_DOMAIN" ]] && _DOMAIN_ALREADY=true
+            done
+            if [[ -n "$_VLESS_DOMAIN" && "$_DOMAIN_ALREADY" != true ]]; then
+                if ((${#_CONFIG_LINKS[@]} == 0)); then
+                    _CONFIG_LABELS+=("Recommended domain link")
+                else
+                    _CONFIG_LABELS+=("Domain link (try only if app.github.dev is allowed)")
+                fi
+                _CONFIG_LINKS+=("$_VLESS_DOMAIN")
+            fi
+            _VLESS_PRIMARY="${_CONFIG_LINKS[0]:-}"
             [[ -z "$_VLESS_PRIMARY" ]] && { echo -e "  ${RED}✖ Error generating link.${NC}"; sleep 2; continue; }
-            {
-                printf '%s\n' "$_VLESS_PRIMARY"
-                [[ -n "$_VLESS_REMAINING_IPS" ]] && printf '%s\n' "$_VLESS_REMAINING_IPS"
-                [[ -n "$_VLESS_DOMAIN" && "$_VLESS_DOMAIN" != "$_VLESS_PRIMARY" ]] && printf '%s\n' "$_VLESS_DOMAIN"
-            } > "$MOBILE_CONFIG_FILE"
+            printf '%s\n' "${_CONFIG_LINKS[@]}" > "$MOBILE_CONFIG_FILE"
             _VHASH=$(printf '%s' "$_VLESS_PRIMARY" | md5sum | awk '{print $1}')
             _PFLAG="$DATA_DIR/.prompted_${_VHASH}"
             if [[ ! -f "$_PFLAG" ]]; then
@@ -858,26 +895,18 @@ while true; do
                 touch "$_PFLAG"
             fi
             refresh_screen
-            echo -e "  ${RED}● Scan to Connect (Recommended Link)${NC}"
-            if command -v qrencode >/dev/null 2>&1; then
-                qrencode -m 2 -t ANSIUTF8 "$_VLESS_PRIMARY" | sed 's/^/  /'
-            else
-                echo -e "  ${DIM}(qrencode not installed — QR unavailable)${NC}"
-            fi
-            echo -e "\n  ${RED}● Recommended VLESS Link (try this first)${NC}"
-            echo -e "  ${WHITE}${_VLESS_PRIMARY}${NC}\n"
-            if [[ -n "$_VLESS_REMAINING_IPS" ]]; then
-                echo -e "  ${RED}● Other IP Fallback Links${NC}"
-                printf '%s\n' "$_VLESS_REMAINING_IPS" | sed "s/^/  ${WHITE}/;s/$/${NC}/"
-                echo -e "  ${DIM}These still use ${PORT_DOMAIN} as SNI/Host for Codespaces routing.${NC}\n"
-            fi
-            if [[ -n "$_VLESS_DOMAIN" && "$_VLESS_DOMAIN" != "$_VLESS_PRIMARY" ]]; then
-                echo -e "  ${RED}● Domain Link (try only if your network allows app.github.dev)${NC}"
-                echo -e "  ${WHITE}${_VLESS_DOMAIN}${NC}\n"
-            fi
+            echo -e "  ${RED}● Configs & Compact QR Codes${NC}"
+            echo -e "  ${DIM}Raw links are printed without color codes and saved to:${NC}"
+            echo -e "  ${WHITE}${MOBILE_CONFIG_FILE}${NC}\n"
+            _INDEX=1
+            for _LINK in "${_CONFIG_LINKS[@]}"; do
+                render_config_entry "$_INDEX" "${_CONFIG_LABELS[$((_INDEX - 1))]}" "$_LINK"
+                _INDEX=$((_INDEX + 1))
+            done
+            echo -e "  ${DIM}IP links keep ${PORT_DOMAIN} as SNI/Host for Codespaces routing.${NC}\n"
             _COUNTRY=$(curl -s --max-time 3 https://ipinfo.io/country </dev/null 2>/dev/null || echo "Unknown")
             if [[ "$_COUNTRY" != "DE" && "$_COUNTRY" != "NL" && "$_COUNTRY" != "Unknown" ]]; then
-                echo -e "  ${RED}⚠ WARNING: Codespace is NOT in Germany (${_COUNTRY})!${NC}"
+                echo -e "  ${RED}WARNING: Codespace is NOT in Germany (${_COUNTRY})!${NC}"
                 echo -e "  ${DIM}Set region to 'Europe West' in GitHub for optimal speeds.${NC}\n"
             fi
             echo -e "  ${DIM}Not working? Visit:${NC} ${GREEN}https://code-leafy.github.io/NetLeafy${NC}\n"
