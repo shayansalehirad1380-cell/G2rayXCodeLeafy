@@ -488,8 +488,15 @@ test_background_supervisor_ownership_is_strict() {
         || fail 'background supervisor heartbeat does not carry ownership data'
     grep_fixed 'background_supervisor_heartbeat_matches()' "$SCRIPT" \
         || fail 'fresh heartbeat cannot prove supervisor ownership when proc env is unavailable'
-    grep_fixed 'printf '\''%s %s %s\n'\'' "$$" "${G2RAY_BG_TASK_TOKEN:-}" "$now"' "$SCRIPT" \
+    grep_fixed 'printf '\''%s %s %s\n'\'' "${BASHPID:-$$}" "${G2RAY_BG_TASK_TOKEN:-}" "$now"' "$SCRIPT" \
         || fail 'heartbeat does not persist pid token and timestamp together'
+    awk '
+        /background_supervisor_status\(\)/ { in_fn=1 }
+        in_fn && /background_supervisor_heartbeat_timestamp/ { saw_timestamp=1 }
+        in_fn && /^}/ { exit }
+        END { exit saw_timestamp ? 0 : 1 }
+    ' "$SCRIPT" \
+        || fail 'background supervisor status still cannot read structured heartbeat timestamps'
     grep_fixed 'supervisor_superseded' "$SCRIPT" \
         || fail 'superseded background supervisors do not self-exit'
     if grep_fixed 'legacy_bg_tasks_running "$p" || background_supervisor_heartbeat_running "$p"' "$SCRIPT"; then

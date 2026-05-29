@@ -928,7 +928,7 @@ background_supervisor_token_current() {
 write_background_supervisor_heartbeat() {
     local now
     now=$(date +%s)
-    printf '%s %s %s\n' "$$" "${G2RAY_BG_TASK_TOKEN:-}" "$now" > "$BG_TASKS_HEARTBEAT_FILE" 2>/dev/null || true
+    printf '%s %s %s\n' "${BASHPID:-$$}" "${G2RAY_BG_TASK_TOKEN:-}" "$now" > "$BG_TASKS_HEARTBEAT_FILE" 2>/dev/null || true
 }
 
 background_supervisor_heartbeat_timestamp() {
@@ -986,7 +986,7 @@ background_supervisor_status() {
     if [[ -n "$expected" && -n "$current" ]]; then
         [[ "$expected" == "$current" ]] && version_state="ok" || version_state="stale"
     fi
-    hb=$(cat "$BG_TASKS_HEARTBEAT_FILE" 2>/dev/null || true)
+    hb=$(background_supervisor_heartbeat_timestamp 2>/dev/null || true)
     if [[ "$hb" =~ ^[0-9]+$ ]]; then
         now=$(date +%s)
         heartbeat_age="$((now - hb))s"
