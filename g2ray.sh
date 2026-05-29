@@ -286,6 +286,27 @@ self_heal_state_summary() {
         "$route_bad" "$edge_bad" "$threshold" "$remaining" "$last_age"
 }
 
+last_log_event_matching() {
+    local pattern="$1" line
+    [[ -s "$LOG_FILE" ]] || { printf 'none recorded'; return 0; }
+    line=$(tail -n 500 "$LOG_FILE" 2>/dev/null | grep -E "$pattern" | tail -n 1 || true)
+    if [[ -z "$line" ]]; then
+        printf 'none recorded'
+        return 0
+    fi
+    printf '%s' "$line" | sed -E 's/ \[(INFO|WARN|ERROR)\] / /'
+}
+
+last_known_state_summary() {
+    local failure repair export
+    failure=$(last_log_event_matching 'route_unusable|edge_unreachable|engine_not_ready|started_route_unusable|started_route_still_unusable|port_public_failed|launch_failed|timeout|failed')
+    repair=$(last_log_event_matching 'route_repair public_ok|route_repair public_failed|force_reconnect verify_external|force_reconnect start_engine ok|restart_ok|started_route_ready|route_repaired|runtime_ready .*action=skip_reconnect')
+    export=$(last_log_event_matching 'config_exports refreshed|fallback_route_unusable|fallback_route_filter')
+    printf 'Last failure : %s\n' "$failure"
+    printf 'Last repair  : %s\n' "$repair"
+    printf 'Last export  : %s\n' "$export"
+}
+
 resolve_domain_ips() {
     local domain="$1" candidates joined
     candidates=$({
@@ -1309,6 +1330,9 @@ show_diagnostics() {
 
     echo -e "\n  ${WHITE}${B}Self-Heal State${NC}"
     echo -e "  ${DIM}$(self_heal_state_summary)${NC}"
+
+    echo -e "\n  ${WHITE}${B}Last Known State${NC}"
+    last_known_state_summary | sed 's/^/  /'
 
     echo -e "\n  ${WHITE}${B}Fallback IP Candidates${NC}"
     echo -e "  ${DIM}(includes resolved, manual, and built-in fallbacks)${NC}"

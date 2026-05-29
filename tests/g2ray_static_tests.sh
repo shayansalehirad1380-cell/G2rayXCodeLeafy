@@ -481,6 +481,22 @@ test_diagnostics_show_self_heal_state() {
     pass 'diagnostics show self-heal state'
 }
 
+test_diagnostics_show_last_known_state() {
+    grep_fixed 'last_known_state_summary()' "$SCRIPT" \
+        || fail 'diagnostics cannot summarize the last known failure/repair/export state'
+    grep_fixed 'Last Known State' "$SCRIPT" \
+        || fail 'diagnostics do not show the last known state section'
+    grep_fixed 'Last failure :' "$SCRIPT" \
+        || fail 'last known state omits the last failure line'
+    grep_fixed 'Last repair  :' "$SCRIPT" \
+        || fail 'last known state omits the last repair line'
+    grep_fixed 'Last export  :' "$SCRIPT" \
+        || fail 'last known state omits the last export line'
+    grep_fixed 'route_unusable|edge_unreachable|engine_not_ready|started_route_unusable|started_route_still_unusable|port_public_failed|launch_failed|timeout|failed' "$SCRIPT" \
+        || fail 'last known failure summary does not include known failure markers'
+    pass 'diagnostics show last known state'
+}
+
 test_background_supervisor_ownership_is_strict() {
     grep_fixed 'background_supervisor_token_current()' "$SCRIPT" \
         || fail 'background supervisor loop does not verify its token remains current'
@@ -730,6 +746,7 @@ test_self_heal_uses_reconnect_backoff
 test_probe_and_gh_commands_are_bounded
 test_diagnostics_show_latency_and_supervisor_state
 test_diagnostics_show_self_heal_state
+test_diagnostics_show_last_known_state
 test_background_supervisor_ownership_is_strict
 test_exports_filter_unusable_fallback_routes
 test_runtime_ready_rejects_started_but_unusable_route
