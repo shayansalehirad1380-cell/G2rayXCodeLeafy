@@ -16,6 +16,7 @@ BG_TASKS_VERSION_FILE="$DATA_DIR/bg_tasks.version"
 BG_TASKS_LOCK_DIR="$DATA_DIR/bg_tasks.lock"
 BG_TASKS_TOKEN_FILE="$DATA_DIR/bg_tasks.token"
 BG_TASKS_HEARTBEAT_FILE="$DATA_DIR/bg_tasks.heartbeat"
+RESUME_GAP_FILE="$DATA_DIR/resume_gap.txt"
 REMOTE_MESSAGE_FILE="$DATA_DIR/message.txt"
 ROUTE_BAD_COUNT_FILE="$DATA_DIR/xhttp_route_bad_count"
 EDGE_BAD_COUNT_FILE="$DATA_DIR/edge_bad_count"
@@ -1015,6 +1016,55 @@ background_supervisor_status() {
     printf 'pid=%s running=%s version=%s token=%s heartbeat_age=%s\n' "${p:-none}" "$running" "$version_state" "$token_state" "$heartbeat_age"
 }
 
+format_duration_compact() {
+    local seconds="${1:-0}" days hours minutes
+    [[ "$seconds" =~ ^[0-9]+$ ]] || seconds=0
+    days=$(( seconds / 86400 ))
+    hours=$(( (seconds % 86400) / 3600 ))
+    minutes=$(( (seconds % 3600) / 60 ))
+    if (( days > 0 )); then
+        printf '%dd %dh %dm' "$days" "$hours" "$minutes"
+    elif (( hours > 0 )); then
+        printf '%dh %dm' "$hours" "$minutes"
+    else
+        printf '%dm %ds' "$minutes" "$((seconds % 60))"
+    fi
+}
+
+resume_gap_threshold_sec() {
+    local threshold="${G2RAY_RESUME_GAP_WARN_SEC:-300}"
+    [[ "$threshold" =~ ^[0-9]+$ && "$threshold" -gt 0 ]] || threshold=300
+    printf '%s' "$threshold"
+}
+
+record_resume_gap() {
+    local reason="${1:-startup}" hb now gap threshold detected
+    hb=$(background_supervisor_heartbeat_timestamp 2>/dev/null || true)
+    [[ "$hb" =~ ^[0-9]+$ ]] || return 0
+    now=$(date +%s 2>/dev/null || echo 0)
+    [[ "$now" =~ ^[0-9]+$ && "$now" -ge "$hb" ]] || return 0
+    gap=$((now - hb))
+    threshold=$(resume_gap_threshold_sec)
+    (( gap < threshold )) && return 0
+    detected=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')
+    printf 'reason=%s gap_sec=%s gap=%s previous_heartbeat=%s detected_at=%s\n' \
+        "$reason" "$gap" "$(format_duration_compact "$gap")" "$hb" "$detected" > "$RESUME_GAP_FILE" 2>/dev/null || true
+    chmod 600 "$RESUME_GAP_FILE" 2>/dev/null || true
+    log_event WARN "resume_gap reason=${reason} gap_sec=${gap} previous_heartbeat=${hb} likely=stopped_or_suspended"
+}
+
+resume_gap_summary() {
+    local line
+    if [[ ! -s "$RESUME_GAP_FILE" ]]; then
+        printf 'Last gap : none recorded\n'
+        printf 'Meaning  : no long supervisor heartbeat gap has been observed yet\n'
+        return 0
+    fi
+    line=$(tail -n 1 "$RESUME_GAP_FILE" 2>/dev/null || true)
+    printf 'Last gap : %s\n' "${line:-none recorded}"
+    printf 'Meaning  : a gap means the supervisor could not heartbeat, usually because the Codespace was stopped, suspended, rebuilding, or quota-blocked\n'
+}
+
 format_bytes() {
     awk -v b="${1:-0}" 'BEGIN{
         if      (b < 1048576)    printf "%.2f KB", b / 1024
@@ -1331,6 +1381,9 @@ show_diagnostics() {
     echo -e "\n  ${WHITE}${B}Self-Heal State${NC}"
     echo -e "  ${DIM}$(self_heal_state_summary)${NC}"
 
+    echo -e "\n  ${WHITE}${B}Resume Gap${NC}"
+    resume_gap_summary | sed 's/^/  /'
+
     echo -e "\n  ${WHITE}${B}Last Known State${NC}"
     last_known_state_summary | sed 's/^/  /'
 
@@ -1452,6 +1505,7 @@ force_reconnect() {
 
 ensure_runtime_ready() {
     local reason="${1:-startup}" xcode xms
+    record_resume_gap "$reason"
     [[ -f "$CONFIG_FILE" ]] || return 0
 
     CODESPACE_NAME=$(_detect_codespace_name 2>/dev/null || true)
@@ -1523,6 +1577,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 check_for_updates "$@"
+record_resume_gap "interactive_attach"
 start_background_tasks
 fetch_remote_message
 enable_anti_sleep

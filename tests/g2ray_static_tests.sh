@@ -10,6 +10,7 @@ README="$ROOT_DIR/README.md"
 CONFIGS="$ROOT_DIR/configs.txt"
 DOCKERFILE="$ROOT_DIR/.devcontainer/Dockerfile"
 CI_WORKFLOW="$ROOT_DIR/.github/workflows/static-tests.yml"
+REOPEN_SCRIPT="$ROOT_DIR/scripts/reopen-codespace.ps1"
 
 fail() {
     printf 'FAIL: %s\n' "$1" >&2
@@ -144,6 +145,8 @@ test_shell_files_are_lf_normalized() {
     [[ -f "$GITATTRIBUTES" ]] || fail '.gitattributes is missing'
     grep_fixed '*.sh text eol=lf' "$GITATTRIBUTES" \
         || fail '.gitattributes does not force shell scripts to LF'
+    grep_fixed '*.ps1 text eol=lf' "$GITATTRIBUTES" \
+        || fail '.gitattributes does not force PowerShell helper scripts to LF'
     grep_fixed 'tests/*.sh text eol=lf' "$GITATTRIBUTES" \
         || fail '.gitattributes does not force test shell scripts to LF'
     pass 'shell files are LF-normalized for Linux Bash'
@@ -497,6 +500,41 @@ test_diagnostics_show_last_known_state() {
     pass 'diagnostics show last known state'
 }
 
+test_diagnostics_show_resume_gap_state() {
+    grep_fixed 'RESUME_GAP_FILE=' "$SCRIPT" \
+        || fail 'script does not persist detected Codespaces resume gaps'
+    grep_fixed 'record_resume_gap()' "$SCRIPT" \
+        || fail 'script cannot record a supervisor heartbeat gap on startup'
+    grep_fixed 'resume_gap_summary()' "$SCRIPT" \
+        || fail 'diagnostics cannot summarize the last resume gap'
+    grep_fixed 'Resume Gap' "$SCRIPT" \
+        || fail 'diagnostics do not show resume gap state'
+    grep_fixed 'resume_gap reason=${reason}' "$SCRIPT" \
+        || fail 'resume gap detection does not log the startup reason'
+    grep_fixed 'record_resume_gap "$reason"' "$SCRIPT" \
+        || fail 'runtime readiness does not record resume gaps before healing'
+    grep_fixed 'record_resume_gap "interactive_attach"' "$SCRIPT" \
+        || fail 'interactive attach can refresh the heartbeat before recording resume gaps'
+    pass 'diagnostics show resume gap state'
+}
+
+test_local_reopen_helper_is_documented() {
+    [[ -f "$REOPEN_SCRIPT" ]] || fail 'local Codespace reopen helper is missing'
+    grep_fixed '--method POST "/user/codespaces/$Name/start"' "$REOPEN_SCRIPT" \
+        || fail 'reopen helper does not use the official Codespaces start API'
+    grep_fixed 'HTTP 402' "$REOPEN_SCRIPT" \
+        || fail 'reopen helper does not explain quota/payment blocked starts'
+    grep_fixed 'gh codespace code -c $Name' "$REOPEN_SCRIPT" \
+        || fail 'reopen helper does not open the restarted Codespace in VS Code'
+    grep_fixed 'scripts/reopen-codespace.ps1' "$README" \
+        || fail 'README does not document the local reopen helper'
+    grep_fixed 'Default idle timeout' "$README" \
+        || fail 'README does not document setting the Codespaces idle timeout'
+    grep_fixed '240 minutes' "$README" \
+        || fail 'README does not recommend the maximum supported idle timeout'
+    pass 'local reopen helper is documented'
+}
+
 test_background_supervisor_ownership_is_strict() {
     grep_fixed 'background_supervisor_token_current()' "$SCRIPT" \
         || fail 'background supervisor loop does not verify its token remains current'
@@ -747,6 +785,8 @@ test_probe_and_gh_commands_are_bounded
 test_diagnostics_show_latency_and_supervisor_state
 test_diagnostics_show_self_heal_state
 test_diagnostics_show_last_known_state
+test_diagnostics_show_resume_gap_state
+test_local_reopen_helper_is_documented
 test_background_supervisor_ownership_is_strict
 test_exports_filter_unusable_fallback_routes
 test_runtime_ready_rejects_started_but_unusable_route

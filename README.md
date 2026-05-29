@@ -123,6 +123,24 @@ bash ./g2ray.sh
 - Set `G2RAY_AUTO_UPDATE=1` only when you want the panel to replace `g2ray.sh` from upstream on startup. It is disabled by default.
 - Override the devcontainer build argument `XRAY_VERSION` to change the pinned Xray-core version. Default: `v26.5.9`.
 
+### Codespace Recovery
+
+GitHub can still stop a Codespace for idle timeout, quota, billing, manual stop, rebuild, or retention policy. No process inside the Codespace can restart it after that because all Codespace processes are stopped. To reduce surprise stops, set your GitHub Codespaces **Default idle timeout** to **240 minutes** in GitHub account settings.
+
+For quick manual recovery from Windows, this repo includes `scripts/reopen-codespace.ps1`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\reopen-codespace.ps1 -Repo OWNER/REPO
+```
+
+If GitHub CLI says the `codespace` scope is missing, run:
+
+```powershell
+gh auth refresh -h github.com -s codespace
+```
+
+The helper uses GitHub's Codespaces start API, waits until the Codespace is available, and opens it in VS Code. If GitHub returns `HTTP 402`, the Codespace is quota or billing blocked and must wait for quota reset or a billing setting change.
+
 ---
 
 ## Architecture
