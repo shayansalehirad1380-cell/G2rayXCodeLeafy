@@ -127,6 +127,16 @@ bash ./g2ray.sh
 
 GitHub can still stop a Codespace for idle timeout, quota, billing, manual stop, rebuild, or retention policy. No process inside the Codespace can restart it after that because all Codespace processes are stopped. To reduce surprise stops, set your GitHub Codespaces **Default idle timeout** to **240 minutes** in GitHub account settings.
 
+To change the idle timeout:
+
+1. Open GitHub in your browser.
+2. Click your profile picture in the top-right corner.
+3. Open **Settings**.
+4. In the left sidebar, open **Codespaces**.
+5. Find **Default idle timeout**.
+6. Set it to **240 minutes**.
+7. Save the setting.
+
 For quick manual recovery from Windows, this repo includes `scripts/reopen-codespace.ps1`:
 
 ```powershell
